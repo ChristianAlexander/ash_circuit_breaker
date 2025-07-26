@@ -1,0 +1,736 @@
+name: Ash CI Template
+on:
+  workflow_call:
+    secrets:
+      HEX_API_KEY:
+        required: false
+    inputs:
+      release:
+        type: boolean
+        default: true
+      publish-docs:
+        type: boolean
+        default: true
+      spark-formatter:
+        type: boolean
+        default: true
+      codegen:
+        type: boolean
+        default: false
+      doctor:
+        type: boolean
+        default: false
+      conventional-commit:
+        type: boolean
+        default: false
+      spark-cheat-sheets:
+        type: boolean
+        default: true
+      sobelow:
+        type: boolean
+        default: true
+      postgres:
+        type: boolean
+        default: false
+      tenants:
+        type: boolean
+        default: true
+      ash_postgres:
+        type: boolean
+        default: true
+      ecto_postgres:
+        type: boolean
+        default: false
+      postgres-version:
+        type: string
+        default: "14"
+      postgres-image:
+        type: string
+      sqlite:
+        type: boolean
+        default: false
+      hex-api-key:
+        type: string
+      rustler-precompiled-module:
+        type: string
+      sat-solver:
+        type: string
+        default: "Picosat"
+      igniter-upgrade:
+        type: boolean
+        default: true
+      elixir-version:
+        type: string
+        default: "default"
+      erlang-version:
+        type: string
+        default: "default"
+      community-files:
+        type: boolean
+        default: true
+env:
+  PG_VERSION: ${{inputs.postgres-version}}
+  ASH_CI_BUILD: true
+permissions:
+  contents: read
+jobs:
+  # Some kind of 403 permissions bug here
+  report_mix_deps:
+    name: "Report Mix Dependencies"
+    runs-on: ubuntu-latest
+    # Only run this job when we're on the main branch, not for PRs
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: erlef/mix-dependency-submission@bdccfd60e12db8f77147dc6024758e459025f5ee # v1.2.1
+    permissions:
+      # Give the default GITHUB_TOKEN write permission to call the dependencies API
+      contents: write
+  auditor:
+    name: audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Update Elixir version in .tool-versions
+        if: inputs.elixir-version != 'default'
+        run: |
+          if [ -f .tool-versions ]; then
+            if grep -q "^elixir " .tool-versions; then
+              sed -i "s/^elixir .*$/elixir ${{ inputs.elixir-version }}/" .tool-versions
+            else
+              echo "elixir ${{ inputs.elixir-version }}" >> .tool-versions
+            fi
+          else
+            echo "elixir ${{ inputs.elixir-version }}" > .tool-versions
+          fi
+      - name: Update Erlang version in .tool-versions
+        if: inputs.erlang-version != 'default'
+        run: |
+          if [ -f .tool-versions ]; then
+            if grep -q "^erlang " .tool-versions; then
+              sed -i "s/^erlang .*$/erlang ${{ inputs.erlang-version }}/" .tool-versions
+            else
+              echo "erlang ${{ inputs.erlang-version }}" >> .tool-versions
+            fi
+          else
+            echo "erlang ${{ inputs.erlang-version }}" > .tool-versions
+          fi
+      - uses: team-alembic/staple-actions/actions/mix-hex-audit@59199173e18eee6748b65d01626ef82d51c6e963 # main
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          task: deps.audit
+  community-files-check:
+    name: Community Files Check
+    runs-on: ubuntu-latest
+    if: ${{ inputs.community-files }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Check community files placement and content
+        run: |
+          EXIT_CODE=0
+          # Check if files exist in root and fail if they do
+          for file in CODE_OF_CONDUCT.md CONTRIBUTING.md FUNDING.yml; do
+            if [ -f "$file" ]; then
+              echo "❌ $file found in root directory. Please move it to .github/ directory."
+              EXIT_CODE=1
+            fi
+          done
+          # Function to fetch expected content from ash-project/.github
+          fetch_expected_content() {
+            local file="$1"
+            local url="https://raw.githubusercontent.com/ash-project/.github/main/$file"
+            curl -s -f "$url" || {
+              echo "❌ Failed to fetch expected content for $file from ash-project/.github"
+              return 1
+            }
+          }
+          # Check files in .github directory
+          for file in CODE_OF_CONDUCT.md CONTRIBUTING.md FUNDING.yml; do
+            filepath=".github/$file"
+            if [ -f "$filepath" ]; then
+              echo "✅ Found $file in .github directory"
+
+              expected_content=$(fetch_expected_content "$file")
+              if [ $? -ne 0 ]; then
+                EXIT_CODE=1
+                continue
+              fi
+
+              actual_content=$(cat "$filepath")
+
+              if [ "$actual_content" != "$expected_content" ]; then
+                echo "❌ Content of $filepath does not match expected content from ash-project/.github"
+                echo "   Please update the file content or delete it to use the standard version."
+                echo "   Expected content URL: https://github.com/ash-project/.github/blob/main/$file"
+                EXIT_CODE=1
+              else
+                echo "✅ Content of $filepath matches expected content"
+              fi
+            else
+              echo "ℹ️  $file not found in .github directory (this is optional)"
+            fi
+          done
+
+          # Check template files
+          template_files=(
+            ".github/PULL_REQUEST_TEMPLATE.md:PULL_REQUEST_TEMPLATE.md"
+            ".github/ISSUE_TEMPLATE/bug_report.md:.github/ISSUE_TEMPLATE/bug_report.md"
+            ".github/ISSUE_TEMPLATE/proposal.md:.github/ISSUE_TEMPLATE/proposal.md"
+          )
+
+          for template_mapping in "${template_files[@]}"; do
+            local_path="${template_mapping%:*}"
+            remote_path="${template_mapping#*:}"
+
+            if [ -f "$local_path" ]; then
+              echo "✅ Found template $local_path"
+
+              expected_content=$(fetch_expected_content "$remote_path")
+              if [ $? -ne 0 ]; then
+                EXIT_CODE=1
+                continue
+              fi
+
+              actual_content=$(cat "$local_path")
+
+              if [ "$actual_content" != "$expected_content" ]; then
+                echo "❌ Content of $local_path does not match expected content from ash-project/.github"
+                echo "   Please update the file content or delete it to use the standard version."
+                echo "   Expected content URL: https://github.com/ash-project/.github/blob/main/$remote_path"
+                EXIT_CODE=1
+              else
+                echo "✅ Content of $local_path matches expected content"
+              fi
+            else
+              echo "ℹ️  Template $local_path not found (this is optional)"
+            fi
+          done
+
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "✅ All community files are properly configured"
+          else
+            echo ""
+            echo "Community files check failed. Please:"
+            echo "1. Move any files from root to .github/ directory"
+            echo "2. Update file contents to match ash-project/.github or delete them"
+            echo "3. Reference: https://github.com/ash-project/.github"
+          fi
+          exit $EXIT_CODE
+  build-test:
+    name: MIX_ENV=test mix.compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Update Elixir version in .tool-versions
+        if: inputs.elixir-version != 'default'
+        run: |
+          if [ -f .tool-versions ]; then
+            if grep -q "^elixir " .tool-versions; then
+              sed -i "s/^elixir .*$/elixir ${{ inputs.elixir-version }}/" .tool-versions
+            else
+              echo "elixir ${{ inputs.elixir-version }}" >> .tool-versions
+            fi
+          else
+            echo "elixir ${{ inputs.elixir-version }}" > .tool-versions
+          fi
+      - name: Update Erlang version in .tool-versions
+        if: inputs.erlang-version != 'default'
+        run: |
+          if [ -f .tool-versions ]; then
+            if grep -q "^erlang " .tool-versions; then
+              sed -i "s/^erlang .*$/erlang ${{ inputs.erlang-version }}/" .tool-versions
+            else
+              echo "erlang ${{ inputs.erlang-version }}" >> .tool-versions
+            fi
+          else
+            echo "erlang ${{ inputs.erlang-version }}" > .tool-versions
+          fi
+      - uses: team-alembic/staple-actions/actions/install-elixir@59199173e18eee6748b65d01626ef82d51c6e963 # main
+      - uses: team-alembic/staple-actions/actions/mix-compile@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: test
+  build-docs:
+    name: mix docs
+    runs-on: ubuntu-latest
+    if: ${{inputs.publish-docs}}
+    needs:
+      - build-test
+      - spark-cheat-sheets
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: team-alembic/staple-actions/actions/mix-docs@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: dev
+          use-cache: false
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        with:
+          path: doc/
+  deploy-docs:
+    name: Deploy docs to GitHub pages.
+    runs-on: ubuntu-latest
+    needs:
+      - build-test
+      - build-docs
+    if: ${{inputs.publish-docs && github.ref == 'refs/heads/main'}}
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+  conventional-commit:
+    name: mix git_ops.check_message
+    runs-on: ubuntu-latest
+    needs: build-test
+    if: ${{inputs.conventional-commit}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: team-alembic/staple-actions/actions/conventional-commit@main
+        with:
+          mix-env: test
+
+  formatter:
+    name: mix format --check-formatted
+    runs-on: ubuntu-latest
+    needs:
+      - build-test
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: team-alembic/staple-actions/actions/mix-format@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: test
+
+  spark-formatter:
+    name: mix spark.formatter --check
+    runs-on: ubuntu-latest
+    needs:
+      - build-test
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        if: ${{inputs.spark-formatter}}
+        with:
+          mix-env: test
+          task: spark.formatter --check
+
+  spark-cheat-sheets:
+    name: mix spark.cheat_sheets --check
+    runs-on: ubuntu-latest
+    needs:
+      - build-test
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        if: ${{inputs.spark-cheat-sheets}}
+        with:
+          mix-env: test
+          task: spark.cheat_sheets --dry-run --yes
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        if: ${{inputs.spark-cheat-sheets}}
+        with:
+          mix-env: test
+          task: spark.cheat_sheets --check
+  sobelow:
+    name: mix sobelow
+    runs-on: ubuntu-latest
+    needs:
+      - build-test
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        if: ${{inputs.sobelow}}
+        with:
+          mix-env: test
+          task: sobelow
+  doctor:
+    name: mix doctor --full --raise
+    runs-on: ubuntu-latest
+    needs: build-test
+    if: ${{inputs.doctor}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: team-alembic/staple-actions/actions/mix-doctor@main
+        with:
+          mix-env: test
+  credo:
+    name: mix credo --strict
+    runs-on: ubuntu-latest
+    needs: build-test
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: team-alembic/staple-actions/actions/mix-credo@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: test
+      - name: Run Credo SAST
+        uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          task: credo --format sarif > results.sarif
+      - name: Upload SARIF file
+        uses: github/codeql-action/upload-sarif@fca7ace96b7d713c7035871441bd52efbe39e27e # v3.28.19
+        with:
+          sarif_file: results.sarif
+          category: credo
+  codegen:
+    name: mix ash.codegen --check
+    runs-on: ubuntu-latest
+    needs:
+      - build-test
+    if: ${{inputs.codegen}}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: test
+          task: ash.codegen --check
+  unused-deps:
+    name: mix deps.unlock --check-unused
+    runs-on: ubuntu-latest
+    needs:
+      - build-test
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: test
+          task: deps.unlock --check-unused
+  igniter-upgrade:
+    name: mix igniter.upgrade
+    runs-on: ubuntu-latest
+    if: ${{inputs.igniter-upgrade}}
+    permissions:
+      # Give the default GITHUB_TOKEN write permission to commit and push the
+      # added or changed files to the repository.
+      contents: write
+    steps:
+      - name: Dependabot metadata
+        id: dependabot-metadata
+        uses: dependabot/fetch-metadata@08eff52bf64351f401fb50d4972fa95b9f2c2d1b # v2.4.0
+        if: github.event.pull_request.user.login == 'dependabot[bot]'
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+        if: github.event.pull_request.user.login == 'dependabot[bot]'
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          task: igniter.upgrade --git-ci --yes
+        if: github.event.pull_request.user.login == 'dependabot[bot]'
+      - name: Commit Changes
+        uses: stefanzweifel/git-auto-commit-action@778341af668090896ca464160c2def5d1d1a3eb0 # v6.0.1
+        if: github.event.pull_request.user.login == 'dependabot[bot]'
+        with:
+          commit_message: "[dependabot skip] Apply Igniter Upgrades"
+          commit_user_name: dependabot[bot]
+  test:
+    name: mix test
+    runs-on: ubuntu-latest
+    needs:
+      - build-test
+    services:
+      postgres:
+        image: ${{ inputs.postgres-image || format('postgres:{0}', inputs.postgres-version) }}
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          TZ: "UTC"
+          PGTZ: "UTC"
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        if: ${{inputs.postgres && inputs.ash_postgres}}
+        with:
+          mix-env: test
+          task: ash_postgres.generate_migrations --check
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: test
+          task: ash_postgres.create
+        if: ${{inputs.postgres && inputs.ash_postgres}}
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: test
+          task: ecto.create
+        if: ${{inputs.postgres && inputs.ecto_postgres}}
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: test
+          task: ash_postgres.migrate
+        if: ${{inputs.postgres && inputs.ash_postgres}}
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: test
+          task: ash_postgres.migrate --tenants
+        if: ${{inputs.postgres && inputs.ash_postgres && inputs.tenants}}
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: test
+          task: ecto.migrate
+        if: ${{inputs.postgres && inputs.ecto_postgres}}
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: test
+          task: ash_sqlite.generate_migrations --check
+        if: ${{inputs.sqlite}}
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: test
+          task: ash_sqlite.create
+        if: ${{inputs.sqlite}}
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: test
+          task: ash_sqlite.migrate
+        if: ${{inputs.sqlite}}
+      - uses: team-alembic/staple-actions/actions/mix-test@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: test
+        env:
+          PGUSER: postgres
+          PGPASS: postgres
+          PGHOST: postgres
+
+  dialyzer:
+    name: mix dialyzer
+    runs-on: ubuntu-latest
+    needs:
+      - build-test
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: team-alembic/staple-actions/actions/mix-dialyzer@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: dev
+
+  build-dev:
+    name: MIX_ENV=dev mix.compile
+    runs-on: ubuntu-latest
+    needs:
+      - build-test
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: team-alembic/staple-actions/actions/mix-compile@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: dev
+  build-release:
+    name: NIF ${{ matrix.nif }} - ${{ matrix.job.target }} (${{ matrix.job.os }})
+    runs-on: ${{ matrix.job.os }}
+    if: ${{ always() && !failure() && !cancelled() && inputs.rustler-precompiled-module && startsWith(github.ref, 'refs/tags/v') }}
+    needs:
+      - credo
+      - unused-deps
+      - spark-formatter
+      - doctor
+      - conventional-commit
+      - spark-cheat-sheets
+      - igniter-upgrade
+      - sobelow
+      - formatter
+      - auditor
+      - test
+      - dialyzer
+      - build-dev
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # we list the oldest OTP version that supports all features needed, have a look at the
+        # erlang docs for the OTP version to see which NIF version is in which OTP release
+        # https://github.com/erlang/otp/blob/master/erts/emulator/beam/erl_nif.h
+        # - "2.15" # OTP 22, OTP 23
+        # - "2.16" # OTP 24, OTP 25
+        # - "2.17" # OTP 26
+        nif: ["2.15"]
+        job:
+          # cranelift-codegen panics at 'error when identifying target: "no supported isa found for arch `arm`"'
+          # - { target: arm-unknown-linux-gnueabihf , os: ubuntu-20.04 , use-cross: true }
+          - {
+              target: aarch64-unknown-linux-gnu,
+              os: ubuntu-20.04,
+              use-cross: true,
+            }
+          - {
+              target: aarch64-unknown-linux-musl,
+              os: ubuntu-20.04,
+              use-cross: true,
+            }
+          - { target: aarch64-apple-darwin, os: macos-15 }
+          - { target: x86_64-apple-darwin, os: macos-15 }
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-20.04 }
+          - {
+              target: x86_64-unknown-linux-musl,
+              os: ubuntu-20.04,
+              use-cross: true,
+            }
+          - {
+              target: riscv64gc-unknown-linux-gnu,
+              os: ubuntu-20.04,
+              use-cross: true,
+              cargo-args: "--no-default-features",
+            }
+          - { target: x86_64-pc-windows-gnu, os: windows-2022 }
+          - { target: x86_64-pc-windows-msvc, os: windows-2022 }
+          - {
+              target: x86_64-unknown-freebsd,
+              os: ubuntu-22.04,
+              use-cross: true,
+              cross-version: v0.2.5,
+            }
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Extract crate information
+        shell: bash
+        run: |
+          # Get the project version from mix.exs
+          echo "PROJECT_VERSION=$(sed -n 's/^  @version "\(.*\)"/\1/p' mix.exs | head -n1)" >> $GITHUB_ENV
+      - name: Add target
+        shell: bash
+        run: |
+          rustup target add ${{ matrix.job.target }}
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          prefix-key: v0-precomp
+          shared-key: ${{ matrix.job.target }}-${{ matrix.nif }}
+          workspaces: |
+            native/igniter_js
+      - name: Build the project
+        id: build-crate
+        uses: philss/rustler-precompiled-action@853ac56183f29a080304df3ff8a194b5bbdc24cc # v1.1.4
+        with:
+          project-name: igniter_js
+          project-version: ${{ env.PROJECT_VERSION }}
+          target: ${{ matrix.job.target }}
+          nif-version: ${{ matrix.nif }}
+          use-cross: ${{ matrix.job.use-cross }}
+          cross-version: ${{ matrix.job.cross-version || 'v0.2.4' }}
+          project-dir: "native/igniter_js"
+          cargo-args: ${{ matrix.job.cargo-args }}
+
+      - name: Artifact upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.build-crate.outputs.file-name }}
+          path: ${{ steps.build-crate.outputs.file-path }}
+
+      - name: Publish archives and packages
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
+        with:
+          files: |
+            ${{ steps.build-crate.outputs.file-path }}
+        if: startsWith(github.ref, 'refs/tags/v')
+  release:
+    permissions:
+      contents: write
+    needs:
+      - credo
+      - unused-deps
+      - spark-formatter
+      - doctor
+      - conventional-commit
+      - build-release
+      - spark-cheat-sheets
+      - igniter-upgrade
+      - sobelow
+      - formatter
+      - auditor
+      - test
+      - dialyzer
+      - build-dev
+    if: ${{ inputs.release && always() && !failure() && !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    name: Release
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: team-alembic/staple-actions/actions/mix-task@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        if: ${{inputs.rustler-precompiled-module}}
+        with:
+          task: rustler_precompiled.download ${{inputs.rustler-precompiled-module}} --only-local --all --print
+      - name: Extract release notes from CHANGELOG.md
+        id: extract-notes
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG_NAME#v}
+
+          # Extract the section for this version from CHANGELOG.md
+          awk -v version="$VERSION" '
+            /^## \[v?[0-9]/ {
+              if (found) exit
+              if (index($0, "[v" version "]") || index($0, "[" version "]")) {
+                found = 1
+                next
+              }
+            }
+            found {
+              if (/^## \[v?[0-9]/) exit
+              print
+            }
+          ' CHANGELOG.md > release_notes.md
+
+          # Check if notes were found
+          if [ -s release_notes.md ]; then
+            echo "has_notes=true" >> $GITHUB_OUTPUT
+            echo "Release notes extracted for version $VERSION"
+          else
+            echo "has_notes=false" >> $GITHUB_OUTPUT
+            echo "No release notes found for version $VERSION, will use auto-generated notes"
+          fi
+      - name: Create draft prerelease with changelog notes
+        if: ${{ (contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') || contains(github.ref, '-pre')) && steps.extract-notes.outputs.has_notes == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          gh release create \
+            --repo ${{ github.repository }} \
+            --title ${GITHUB_REF#refs/tags/} \
+            --prerelease \
+            --notes-file release_notes.md \
+            ${GITHUB_REF#refs/tags/}
+      - name: Create draft prerelease with generated notes
+        if: ${{ (contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') || contains(github.ref, '-pre')) && steps.extract-notes.outputs.has_notes != 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          gh release create \
+            --repo ${{ github.repository }} \
+            --title ${GITHUB_REF#refs/tags/} \
+            --prerelease \
+            --generate-notes \
+            ${GITHUB_REF#refs/tags/}
+      - name: Create release with changelog notes
+        if: ${{ (!contains(github.ref, '-rc') && !contains(github.ref, '-beta') && !contains(github.ref, '-alpha') && !contains(github.ref, '-pre')) && steps.extract-notes.outputs.has_notes == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          gh release create \
+            --repo ${{ github.repository }} \
+            --title ${GITHUB_REF#refs/tags/} \
+            --notes-file release_notes.md \
+            ${GITHUB_REF#refs/tags/}
+      - name: Create release with generated notes
+        if: ${{ (!contains(github.ref, '-rc') && !contains(github.ref, '-beta') && !contains(github.ref, '-alpha') && !contains(github.ref, '-pre')) && steps.extract-notes.outputs.has_notes != 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          gh release create \
+            --repo ${{ github.repository }} \
+            --title ${GITHUB_REF#refs/tags/} \
+            --generate-notes \
+            ${GITHUB_REF#refs/tags/}
+      - uses: team-alembic/staple-actions/actions/mix-hex-publish@59199173e18eee6748b65d01626ef82d51c6e963 # main
+        with:
+          mix-env: dev
+          hex-api-key: ${{secrets.HEX_API_KEY}}
