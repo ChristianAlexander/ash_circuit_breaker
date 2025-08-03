@@ -56,6 +56,7 @@ It does this by adding a global change or preparation to the resource with the p
 | [`per`](#circuit-action-per){: #circuit-action-per .spark-required} | `pos_integer` |  | The time period (in milliseconds) for which failures are counted |
 | [`reset_after`](#circuit-action-reset_after){: #circuit-action-reset_after .spark-required} | `pos_integer` |  | The time period (in milliseconds) after which the circuit will attempt to close again |
 | [`name`](#circuit-action-name){: #circuit-action-name } | `atom \| (any -> any) \| (any, any -> any)` | `&AshCircuitBreaker.name_for_breaker/1` | The name to use for the circuit breaker. This can be an atom or a function that takes a query/changeset and optional context object to generate an atom key. |
+| [`should_break?`](#circuit-action-should_break?){: #circuit-action-should_break? } | `nil \| (any -> any)` |  | A function that takes the error and returns true if the circuit should break. If not provided, the circuit will break on any error. |
 
 
 

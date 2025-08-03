@@ -37,6 +37,12 @@ defmodule AshCircuitBreaker.Change do
                      default: &AshCircuitBreaker.name_for_breaker/1,
                      doc:
                        "The name to use for the circuit breaker. This can be an atom or a function that takes a changeset and optional context object to generate an atom key."
+                   ],
+                   should_break?: [
+                     type: {:or, [nil, {:fun, 1}]},
+                     required: false,
+                     doc:
+                       "A function that takes the error and returns true if the circuit should break. If not provided, the circuit will break on any error."
                    ]
                  )
 
@@ -103,9 +109,13 @@ defmodule AshCircuitBreaker.Change do
        ),
        do: result
 
-  defp after_transaction(changeset, {:error, _} = result, opts, context) do
-    {:ok, fuse_name} = get_name(changeset, opts, context)
-    :fuse.melt(fuse_name)
+  defp after_transaction(input, {:error, error} = result, opts, context) do
+    should_break? = opts[:should_break?]
+
+    if is_nil(should_break?) or (is_function(should_break?, 1) and should_break?.(error)) do
+      {:ok, fuse_name} = get_name(input, opts, context)
+      :fuse.melt(fuse_name)
+    end
 
     result
   end

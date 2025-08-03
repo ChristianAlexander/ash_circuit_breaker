@@ -28,6 +28,32 @@ defmodule Example.SampleResource do
       end
     end
 
+    create :always_fail_create_ignore_errors do
+      accept :*
+
+      change fn changeset, _context ->
+        Ash.Changeset.before_action(changeset, fn changeset ->
+          Ash.Changeset.add_error(changeset,
+            field: :should_fail,
+            message: "This action is configured to fail"
+          )
+        end)
+      end
+    end
+
+    create :always_fail_create_all_errors do
+      accept :*
+
+      change fn changeset, _context ->
+        Ash.Changeset.before_action(changeset, fn changeset ->
+          Ash.Changeset.add_error(changeset,
+            field: :should_fail,
+            message: "This action is configured to fail"
+          )
+        end)
+      end
+    end
+
     update :fallible_update do
       accept :*
       require_atomic? false
@@ -84,6 +110,18 @@ defmodule Example.SampleResource do
       end
     end
 
+    action :always_fail_action_ignore_errors, :string do
+      run fn input, _context ->
+        {:error, "This action is configured to fail"}
+      end
+    end
+
+    action :always_fail_action_all_errors, :string do
+      run fn input, _context ->
+        {:error, "This action is configured to fail"}
+      end
+    end
+
     action :regular_action, :string do
       argument :input_data, :string
 
@@ -99,6 +137,20 @@ defmodule Example.SampleResource do
       per: :timer.seconds(1),
       reset_after: :timer.seconds(2),
       name: &name_fun/1
+
+    action :always_fail_create_ignore_errors,
+      limit: 1,
+      per: :timer.seconds(1),
+      reset_after: :timer.seconds(2),
+      name: &name_fun/1,
+      should_break?: fn _error -> false end
+
+    action :always_fail_create_all_errors,
+      limit: 1,
+      per: :timer.seconds(1),
+      reset_after: :timer.seconds(2),
+      name: &name_fun/1,
+      should_break?: fn _error -> true end
 
     action :fallible_update,
       limit: 1,
@@ -117,6 +169,20 @@ defmodule Example.SampleResource do
       per: :timer.seconds(1),
       reset_after: :timer.seconds(2),
       name: &name_fun/1
+
+    action :always_fail_action_ignore_errors,
+      limit: 1,
+      per: :timer.seconds(1),
+      reset_after: :timer.seconds(2),
+      name: &name_fun/1,
+      should_break?: fn _error -> false end
+
+    action :always_fail_action_all_errors,
+      limit: 1,
+      per: :timer.seconds(1),
+      reset_after: :timer.seconds(2),
+      name: &name_fun/1,
+      should_break?: fn _error -> true end
   end
 
   attributes do

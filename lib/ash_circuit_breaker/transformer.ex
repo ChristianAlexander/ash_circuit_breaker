@@ -72,7 +72,8 @@ defmodule AshCircuitBreaker.Transformer do
                 limit: entity.limit,
                 per: entity.per,
                 reset_after: entity.reset_after,
-                name: entity.name},
+                name: entity.name,
+                should_break?: entity.should_break?},
              only_when_valid?: true
            ) do
       updated_action = %{action | preparations: [preparation | action.preparations]}
@@ -89,7 +90,8 @@ defmodule AshCircuitBreaker.Transformer do
                 limit: entity.limit,
                 per: entity.per,
                 reset_after: entity.reset_after,
-                name: entity.name}
+                name: entity.name,
+                should_break?: entity.should_break?}
            ) do
       updated_action = %{action | changes: [change | action.changes]}
       {:ok, replace_entity(dsl, [:actions], updated_action, &(&1.name == action.name))}

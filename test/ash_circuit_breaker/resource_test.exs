@@ -81,6 +81,38 @@ defmodule AshCircuitBreaker.ResourceTest do
     end
   end
 
+  describe "always_fail_create_ignore_errors" do
+    test "Executes a create action that always fails but ignores errors", %{test: test} do
+      changeset =
+        SampleResource
+        |> Ash.Changeset.for_create(:always_fail_create_ignore_errors, %{
+          description: "Test"
+        })
+
+      opts = [context: %{circuit_name: test}]
+      {:error, _error} = Ash.create(changeset, opts)
+      {:error, _error} = Ash.create(changeset, opts)
+
+      assert :ok = :fuse.ask(test, :sync)
+    end
+  end
+
+  describe "always_fail_create_all_errors" do
+    test "breaks the circuit", %{test: test} do
+      changeset =
+        SampleResource
+        |> Ash.Changeset.for_create(:always_fail_create_all_errors, %{
+          description: "Test"
+        })
+
+      opts = [context: %{circuit_name: test}]
+      {:error, _error} = Ash.create(changeset, opts)
+      {:error, _error} = Ash.create(changeset, opts)
+
+      assert :blown = :fuse.ask(test, :sync)
+    end
+  end
+
   describe "fallible_update" do
     test "Updates a resource successfully", %{test: test} do
       changeset =
@@ -351,6 +383,34 @@ defmodule AshCircuitBreaker.ResourceTest do
       assert {:error, error} = Ash.run_action(action_input, opts)
       assert %Ash.Error.Unknown{errors: [error]} = error
       assert %AshCircuitBreaker.CircuitBroken{} = error
+    end
+  end
+
+  describe "always_fail_action_ignore_errors" do
+    test "Executes an action that always fails but ignores errors", %{test: test} do
+      action_input =
+        SampleResource
+        |> Ash.ActionInput.for_action(:always_fail_action_ignore_errors, %{})
+
+      opts = [context: %{circuit_name: test}]
+      {:error, _error} = Ash.run_action(action_input, opts)
+      {:error, _error} = Ash.run_action(action_input, opts)
+
+      assert :ok = :fuse.ask(test, :sync)
+    end
+  end
+
+  describe "always_fail_action_all_errors" do
+    test "breaks the circuit", %{test: test} do
+      action_input =
+        SampleResource
+        |> Ash.ActionInput.for_action(:always_fail_action_all_errors, %{})
+
+      opts = [context: %{circuit_name: test}]
+      {:error, _error} = Ash.run_action(action_input, opts)
+      {:error, _error} = Ash.run_action(action_input, opts)
+
+      assert :blown = :fuse.ask(test, :sync)
     end
   end
 end

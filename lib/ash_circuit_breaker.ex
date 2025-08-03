@@ -58,17 +58,25 @@ defmodule AshCircuitBreaker do
             default: &__MODULE__.name_for_breaker/1,
             doc:
               "The name to use for the circuit breaker. This can be an atom or a function that takes a query/changeset and optional context object to generate an atom key."
+          ],
+          should_break?: [
+            type: {:or, [nil, {:fun, 1}]},
+            required: false,
+            doc:
+              "A function that takes the error and returns true if the circuit should break. If not provided, the circuit will break on any error."
           ]
         ]
       }
     ]
   }
 
-  defstruct [:action, :limit, :per, :reset_after, :name, :__identifier__]
+  defstruct [:action, :limit, :per, :reset_after, :name, :should_break?, :__identifier__]
 
   @type namefun ::
           (Ash.Changeset.t() | Ash.ActionInput.t() -> atom())
           | (Ash.Changeset.t() | Ash.ActionInput.t(), map -> atom())
+
+  @type error_matcher :: (any -> boolean())
 
   @type t :: %__MODULE__{
           __identifier__: any,
@@ -76,7 +84,8 @@ defmodule AshCircuitBreaker do
           limit: pos_integer(),
           per: pos_integer(),
           reset_after: pos_integer(),
-          name: atom() | namefun()
+          name: atom() | namefun(),
+          should_break?: error_matcher() | nil
         }
 
   use Spark.Dsl.Extension, sections: [@circuit], transformers: [__MODULE__.Transformer]

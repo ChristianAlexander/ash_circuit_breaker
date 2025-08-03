@@ -44,6 +44,16 @@ defmodule MyApp.Post do
       limit: 10,
       per: :timer.minutes(1),
       reset_after: :timer.minutes(2)
+
+    # Only break circuit for specific error types
+    action :delete,
+      limit: 3,
+      per: :timer.seconds(15),
+      reset_after: :timer.minutes(5),
+      should_break?: fn error ->
+        # Only break on timeout or database errors, ignore validation errors
+        match?(%{class: :timeout}, error) or match?(%{class: :database}, error)
+      end
   end
 
   # ... rest of your resource definition
@@ -73,6 +83,29 @@ circuit do
   action :create, limit: 5, per: :timer.seconds(30), reset_after: :timer.minutes(5)
   action :update, limit: 10, per: :timer.minutes(1), reset_after: :timer.minutes(2)
   action :delete, limit: 3, per: :timer.seconds(15), reset_after: :timer.minutes(10)
+end
+```
+
+### Error Filtering
+
+```elixir
+circuit do
+  # Only break circuit on infrastructure errors, not validation errors
+  action :create,
+    limit: 5,
+    per: :timer.seconds(30),
+    reset_after: :timer.minutes(5),
+    should_break?: fn error ->
+      # Don't break on user input validation errors
+      not match?(%Ash.Error.Invalid{}, error)
+    end
+
+  # Never break circuit for analytics actions
+  action :track_event,
+    limit: 100,
+    per: :timer.minutes(1),
+    reset_after: :timer.seconds(30),
+    should_break?: fn _error -> false end
 end
 ```
 
@@ -120,7 +153,11 @@ defmodule MyApp.Post do
       change {AshCircuitBreaker.Change,
         limit: 10,
         per: :timer.minutes(1),
-        reset_after: :timer.minutes(2)}
+        reset_after: :timer.minutes(2),
+        should_break?: fn error ->
+          # Only break on system errors, not validation errors
+          not match?(%Ash.Error.Invalid{}, error)
+        end}
     end
   end
 end
@@ -143,6 +180,30 @@ end
 
 # Use the built-in name function (default)
 name: &AshCircuitBreaker.name_for_breaker/1
+```
+
+### Error Filtering with `should_break?`
+
+By default, any error will trigger the circuit breaker. Use `should_break?` to only break on specific error types:
+
+```elixir
+circuit do
+  # Only break on timeout errors
+  action :create,
+    limit: 5,
+    per: :timer.seconds(30),
+    reset_after: :timer.minutes(5),
+    should_break?: fn error ->
+      match?(%{class: :timeout}, error)
+    end
+
+  # Break on any error (default behavior when should_break? is not specified)
+  action :delete,
+    limit: 3,
+    per: :timer.seconds(15),
+    reset_after: :timer.minutes(5),
+    should_break?: fn _error -> true end
+end
 ```
 
 ## Circuit Breaker States
@@ -182,6 +243,7 @@ In web applications, the exception includes `Plug.Exception` behaviour for autom
 - **`per`**: Time window (in milliseconds) for counting failures
 - **`reset_after`**: Time (in milliseconds) before attempting to close an open circuit
 - **`name`**: Identifier for the circuit breaker (atom or function)
+- **`should_break?`**: Function that takes an error and returns `true` if the circuit should break, `false` otherwise (optional, defaults to breaking on any error)
 
 ### Example Configurations
 
@@ -194,6 +256,65 @@ action :process_data, limit: 20, per: :timer.minutes(5), reset_after: :timer.min
 
 # Critical operation with long recovery time
 action :payment, limit: 1, per: :timer.seconds(5), reset_after: :timer.minutes(30)
+```
+
+## Error Filtering with `should_break?`
+
+The `should_break?` option gives you fine-grained control over which errors should trigger the circuit breaker. This is particularly useful when you want to:
+
+- **Distinguish between user errors and system errors**: Don't break the circuit for validation failures caused by bad user input
+- **Ignore non-critical errors**: Keep the circuit closed for operations where failures are acceptable
+- **Target specific error types**: Only break on infrastructure issues like timeouts or database connection failures
+
+### Common Error Filtering Patterns
+
+```elixir
+# Only break on timeout errors
+should_break?: fn error ->
+  match?(%{class: :timeout}, error)
+end
+
+# Only break on database/infrastructure errors
+should_break?: fn error ->
+  match?(%{class: :database}, error) or
+  match?(%{class: :timeout}, error) or
+  match?(%{class: :network}, error)
+end
+
+# Ignore validation errors (user input problems)
+should_break?: fn error ->
+  not match?(%Ash.Error.Invalid{}, error)
+end
+
+# Only break on specific error codes
+should_break?: fn error ->
+  case error do
+    %{code: code} when code in ["TIMEOUT", "CONNECTION_REFUSED", "SERVICE_UNAVAILABLE"] -> true
+    _ -> false
+  end
+end
+
+# Custom logic based on error message
+should_break?: fn error ->
+  message = Exception.message(error)
+  String.contains?(message, "database") or String.contains?(message, "timeout")
+end
+```
+
+### Conditional Circuit Breaking
+
+```elixir
+# Break only during business hours
+should_break?: fn error ->
+  hour = DateTime.utc_now().hour
+  # More strict during business hours (9 AM - 5 PM UTC)
+  if hour >= 9 and hour <= 17 do
+    true  # Break on any error during business hours
+  else
+    # Only break on severe errors outside business hours
+    match?(%{class: :timeout}, error)
+  end
+end
 ```
 
 ## Monitoring
