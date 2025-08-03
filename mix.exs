@@ -2,6 +2,9 @@ defmodule AshCircuitBreaker.MixProject do
   use Mix.Project
 
   @version "0.0.1"
+  @description """
+  An extension for Ash.Resource which adds the ability to wrap actions in circuit breakers to allow for graceful handling of and recovery from failures.
+  """
 
   def project do
     [
@@ -10,7 +13,7 @@ defmodule AshCircuitBreaker.MixProject do
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      description: @moduledoc,
+      description: @description,
       dialyzer: [plt_add_apps: [:mix]],
       docs: docs(),
       aliases: aliases(),
