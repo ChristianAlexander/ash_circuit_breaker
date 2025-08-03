@@ -1,7 +1,7 @@
 defmodule AshCircuitBreaker.MixProject do
   use Mix.Project
 
-  @version "0.0.1"
+  @version "0.1.0"
   @description """
   An extension for Ash.Resource which adds the ability to wrap actions in circuit breakers to allow for graceful handling of and recovery from failures.
   """

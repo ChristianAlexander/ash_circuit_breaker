@@ -17,7 +17,7 @@ Add `ash_circuit_breaker` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ash_circuit_breaker, "~> 0.0.1"}
+    {:ash_circuit_breaker, "~> 0.1.0"}
   ]
 end
 ```
