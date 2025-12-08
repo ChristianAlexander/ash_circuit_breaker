@@ -72,7 +72,7 @@ defmodule AshCircuitBreaker.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:ash, "~> 3.5.33"},
+      {:ash, "~> 3.11.1"},
       {:spark, "~> 2.0"},
       {:fuse, "~> 2.4"},
       {:plug, "~> 1.17", optional: true},
